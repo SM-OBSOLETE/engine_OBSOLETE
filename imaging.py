@@ -1,17 +1,20 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
 import cStringIO
 
-
-def write_image(img, format="png"):
+def write_image(img, fp=None, size=None, colormap=None, format="png"):
 	'''Save image in a given format and return the StringIO object'''
-	fig = plt.figure()
-	fig_ax1=fig.add_subplot(111)
-	fig_ax1.imshow(img)
-	sio = cStringIO.StringIO()
-	plt.savefig(sio, format=format, bbox_inches='tight')
-	return sio
+	if not fp:
+		fp = cStringIO.StringIO()
+	if not size:
+		size = (len(img[0]), len(img))
+	if colormap:
+		w = png.Writer(size=size, bitdepth=8, palette=colormap)
+	else:
+		w = png.Writer(size=size, bitdepth=8)
+	w.write(fp, img)
+	# png_img = png.from_array(img, mode='RGB', info={"height":size[1], "width":size[0]})
+	# png_img.save(fp)
+	return fp
 
 def make_image_dict(nRows, nColumns, valdict, offset=0):
 	'''Create image from a dictionary of its nonzero pixels'''
@@ -36,5 +39,4 @@ def make_image_arrays(nRows, nColumns, indices, values, offset=0):
 			print("[WARNING]: Index %d out of bounds for %dx%d m/z image!" % (indices[n]+offset, nRows, nColumns))
 	img=np.reshape(img,(nRows, nColumns))
 	return img
-
 

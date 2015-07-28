@@ -1,135 +1,128 @@
+"""
+.. module:: computing
+    :synopsis: Functions for running spark jobs.
+
+.. moduleauthor:: Sergey Nikolenko <snikolenko@gmail.com>
+"""
+
+
 import numpy as np
+import numpy.linalg
 import bisect
 
-from pyMS.pyisocalc import pyisocalc
-from pyMS.centroid_detection import gradient
+import numpy as np
 
-def txt_to_spectrum(s):
-    arr = s.strip().split("|")
-    return ( arr[0], np.array([ float(x) for x in arr[2].split(" ") ]), np.array([ float(x) for x in arr[1].split(" ") ]) )
+from util import * 
+from chaos import * 
 
-def get_one_group_total(mz_lower, mz_upper, mzs, intensities):
-    return np.sum(intensities[ bisect.bisect_left(mzs, mz_lower) : bisect.bisect_right(mzs, mz_upper) ])
 
-def get_one_group_total_txt(name, mz_lower, mz_upper, mzs, intensities):
-    res = get_one_group_total(mz_lower, mz_upper, mzs, intensities)
-    if res > 0.0001:
-    	return "%s:%.4f" % (name, res)
-    else:
-    	return ""
+def run_fulldataset(sc, fname, data, nrows, ncols):
+	'''Run a full dataset processing job.
+	:param sc: SparkContext
+	:param fname: dataset filename (either local or on s3n)
+	:param data: list of input queries to be sliced out of the dataset
+	:param nrows: number of rows in an image
+	:param ncols: number of columns in an image
+	'''
+	ff = sc.textFile(fname)
+	spectra = ff.map(txt_to_spectrum)
+	qres = spectra.map(lambda sp : process_spectrum_multiple_queries(data, sp)).reduce(reduce_manygroups2d_dict_individual)
+	# entropies = [ [ get_block_entropy_dict(x, nrows, ncols) for x in res ] for res in qres ]
+	return qres
 
-def get_many_groups_total_txt(queries, sp):
-	return [get_one_group_total_txt(sp[0], q[0], q[1], sp[1], sp[2]) for q in queries]
+def run_extractmzs(sc, fname, data, nrows, ncols):
+	'''Run the processing job on a single sum formula.'''
+	ff = sc.textFile(fname)
+	spectra = ff.map(txt_to_spectrum)
+	qres = spectra.map(lambda sp : get_many_groups_total_dict_individual(data, sp)).reduce(reduce_manygroups_dict)
+	entropies = dict( (k, [ get_block_entropy_dict(x, nrows, ncols) for x in v ]) for k,v in qres.iteritems())
+	return (qres, entropies)
 
-def reduce_manygroups_txt(x, y):
-	return [ join_strings(x[i], y[i]) for i in xrange(len(x))]
+def process_spectrum_multiple_queries(data, sp):
+	'''Run multiple queries on a spectrum.
 
-def get_many_groups2d_total_txt(data, sp):
-	return [ [get_one_group_total_txt(sp[0], q[0], q[1], sp[1], sp[2]) for q in queries] for queries in data]
+	:param data: list of sets of queries (each set corresponds to several peaks)
+	:param sp: spectrum given as a dictionary
+	'''
+	return [ process_spectrum_onequery(queries, sp) for queries in data]
 
-def reduce_manygroups2d_txt(xarray, yarray):
-	return [ [ join_strings(xarray[i][j], yarray[i][j]) for j in xrange(len(xarray[i]))] for i in xrange(len(xarray)) ]
-
-def join_strings(s1, s2):
-	if s1 == "":
-		return s2
-	elif s2 == "":
-		return s1
-	else:
-		return s1 + " " + s2
+def process_spectrum_onequery(queries, sp):
+	'''Run one set of queries on a spectrum.'''
+	return [ get_one_group_total_dict(sp[0], q[0], q[1], sp[1], sp[2]) for q in queries ]
 
 def get_one_group_total_dict(name, mz_lower, mz_upper, mzs, intensities):
-    res = get_one_group_total(mz_lower, mz_upper, mzs, intensities)
-    if res > 0.0001:
-    	return {int(name) : res}
-    else:
-    	return {}
+	'''Get a single query datapoint as a dictionary.
 
-def join_dicts(s1, s2):
-	s1.update({ k : v + s1.get(k, 0.0) for k,v in s2.iteritems() })
-	return s1
+	:param name: key for the resulting dictionary
+	:param mz_lower: lower bound on the m/z interval
+	:param mz_upper: upper bound on the m/z interval
+	:param mzs: list of m/z values in the spectrum
+	:param intensities: list of intensities in the spectrum
 
-def get_many_groups_total_dict(queries, sp):
-	res = get_one_group_total_dict(sp[0], queries[0][0], queries[0][1], sp[1], sp[2])
-	for q in queries[1:]:
-		res = join_dicts(res, get_one_group_total_dict(sp[0], q[0], q[1], sp[1], sp[2]))
-	return res
+	Returns:
+		the total intensity of the input spectrum summed over the [mz_lower, mz_upper] interval; returns an empty dictionary if intensity is too low
+	'''
+	res = np.sum(intensities[ bisect.bisect_left(mzs, mz_lower) : bisect.bisect_right(mzs, mz_upper) ])
+	if res > 0.0001:
+		return {int(name) : res}
+	else:
+		return {}
 
 def get_many_groups_total_dict_individual(queries, sp):
-	res = [ get_one_group_total_dict(sp[0], q[0], q[1], sp[1], sp[2]) for q in queries ]
+	'''Run one set of queries on a spectrum and return result as a dictionary.'''
+	res = dict( (k, [ get_one_group_total_dict(sp[0], q[0], q[1], sp[1], sp[2]) for q in v ]) for k,v in queries.iteritems())
 	return res
 
-def get_many_groups2d_total_dict_individual(data, sp):
-	return [ get_many_groups_total_dict_individual(queries, sp) for queries in data]
+def txt_to_spectrum(s):
+	'''Converts a text string in the format
+	:samp:`id|mz1 mz2 ... mzN|int1 int2 ... intN`
+	to a spectrum in the form of two arrays: array of m/z values and array of intensities.'''
+	arr = s.strip().split("|")
+	return ( arr[0], np.array([ float(x) for x in arr[2].split(" ") ]), np.array([ float(x) for x in arr[1].split(" ") ]) )
+
+def reduce_manygroups2d_dict(xarray, yarray):
+	'''The basic reduce procedure: sum over two sets of dictionaries.'''
+	return [ join_dicts(xarray[i], yarray[i]) for i in xrange(len(xarray)) ]
+
+def join_dicts(s1, s2):
+	'''Join two dictionaries, combining and adding their values.'''
+	s1.update(dict( (k, v + s1.get(k, 0.0) ) for k,v in s2.iteritems() ) )
+	return s1
 
 def reduce_manygroups_dict(x, y):
-	return [ join_dicts(x[i], y[i]) for i in xrange(len(x))]
+	return dict( (k, [ join_dicts(v[i], y[k][i]) for i in xrange(len(v))] ) for k,v in x.iteritems() )
 
 def reduce_manygroups2d_dict_individual(xarray, yarray):
+	'''The basic depth-two reduce procedure: sum over two sets of lists of dictionaries.'''
 	return [ [ join_dicts(xarray[j][i], yarray[j][i]) for i in xrange(len(xarray[j])) ] for j in xrange(len(xarray)) ]
 
-def get_many_groups2d_total_dict(data, sp):
-	# return [ [get_one_group_total_dict(sp[0], q[0], q[1], sp[1], sp[2]) for q in queries] for queries in data]
-	return [ get_many_groups_total_dict(queries, sp) for queries in data]
-
-def inner_correlations(images):
-	# 3. Score correlation with monoiso
-	notnull_monoiso = ion_datacube.xic[:,0] > 0 # only compare pixels with values in the monoisotopic (otherwise high correlation for large empty areas)
-	print isotope_ms[adduct].get_spectrum(source='centroids')[1][1:]
-	iso_correlation_score[adduct] = np.average([np.corrcoef(ion_datacube.xic[notnull_monoiso,0],ion_datacube.xic[notnull_monoiso,ii])[0,1] for ii in range(1,len(mz_list))] ,weights=isotope_ms[adduct].get_spectrum(source='centroids')[1][1:])
-	
-	# 4. Score isotope ratio
-	isotope_intensity = np.asarray(isotope_ms[adduct].get_spectrum(source='centroids')[1])
-	image_intensities = [sum(ion_datacube.xic[:,ii]) for ii in range(0,len(mz_list))]
-	iso_ratio_score[adduct] = 1-np.mean(abs( isotope_intensity/np.linalg.norm(isotope_intensity) - image_intensities/np.linalg.norm(image_intensities)))
-
-def corr_dicts(a, b):
-    commonkeys = [ k for k in a if k in b ]
-    return np.corrcoef(np.array([ a[k] for k in commonkeys ]), np.array([ b[k] for k in commonkeys ]))[0][1]
-
-def avg_dict_correlation(images):
-	corrs = []
-	for i in xrange(len(images)):
-		for j in xrange(i):
-			commonkeys = [ k for k in images[i] if k in images[j] ]
-			if len(commonkeys) > 0:
-				corrs.append(np.corrcoef(np.array([ images[i][k] for k in commonkeys ]), np.array([ images[j][k] for k in commonkeys ]))[0][1])
-			else:
-				corrs.append( 0 )
-	res = np.mean(corrs)
+def avg_intensity_correlation(images, peak_intensities):
+	'''Correlation between peak intensities and images intensities'''
+	if len(images) != len(peak_intensities):
+		# print "Length mismatch"
+		# print "%s" % peak_intensities
+		# print "%s" % images
+		return 0
+	image_intensities =np.array([ np.sum(img.values()) for img in images ])
+	res = 1-np.linalg.norm(abs( peak_intensities/np.linalg.norm(peak_intensities) - image_intensities/np.linalg.norm(image_intensities)))
 	if np.isnan(res):
 		return 0
 	else:
 		return res
 
-def reduce_manygroups2d_dict(xarray, yarray):
-	return [ join_dicts(xarray[i], yarray[i]) for i in xrange(len(xarray)) ]
-
-def get_lists_of_mzs(sf):
-	try:
-		isotope_ms = pyisocalc.isodist(sf,plot=False,sigma=0.01,charges=-2,resolution=100000.0,do_centroid=False)
-		mzlist = list(isotope_ms.get_mzs())
-		intenslist = list(isotope_ms.get_intensities())
-		mzs_list, intensities_list, indices_list = gradient(isotope_ms.get_mzs(), isotope_ms.get_intensities(), max_output=-1, weighted_bins=0)
-		indices_list = [i if intenslist[i] > intenslist[i+1] else i+1 for i in indices_list]
-		mzs_list = [mzlist[i] for i in indices_list]
-		intensities_list = [intenslist[i] for i in indices_list]
-		min_i = np.min([ i for i in xrange(len(intenslist)) if intenslist[i] > 0.01])
-		max_i = np.max([ i for i in xrange(len(intenslist)) if intenslist[i] > 0.01])
-		return {
-			"isodist_mzs" : mzlist[min_i:max_i],
-			"isodist_int" : intenslist[min_i:max_i],
-			"grad_mzs"	  : list(mzs_list),
-			"grad_int"	  : list(intensities_list),
-			"grad_ind"	  : list(indices_list - min_i) }
-	except:
-		return {
-			"isodist_mzs" : [],
-			"isodist_int" : [],
-			"grad_mzs"	  : [],
-			"grad_int"	  : [],
-			"grad_ind"	  : []
-		}
-
+def avg_dict_correlation(images):
+	'''Average correlation between the first, monoisotopic image and all other images'''
+	corrs = []
+	for i in xrange(1, len(images)):
+		commonkeys = [ k for k in images[i] if k in images[0] ]
+		if len(commonkeys) > 0:
+			corrs.append(np.corrcoef(np.array([ images[i][k] for k in commonkeys ]), np.array([ images[0][k] for k in commonkeys ]))[0][1])
+		else:
+			corrs.append( 0 )
+	res = np.mean(corrs)
+	if np.isnan(res):
+		return 0
+	else:
+		return res
 
 
