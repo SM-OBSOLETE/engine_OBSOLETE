@@ -35,8 +35,8 @@ def run_extractmzs(sc, fname, data, nrows, ncols):
 	ff = sc.textFile(fname)
 	spectra = ff.map(txt_to_spectrum)
 	qres = spectra.map(lambda sp : get_many_groups_total_dict_individual(data, sp)).reduce(reduce_manygroups_dict)
-	entropies = dict( (k, [ get_block_entropy_dict(x, nrows, ncols) for x in v ]) for k,v in qres.iteritems())
-	return (qres, entropies)
+	# entropies = dict( (k, [ get_block_entropy_dict(x, nrows, ncols) for x in v ]) for k,v in qres.iteritems())
+	return qres
 
 def process_spectrum_multiple_queries(data, sp):
 	'''Run multiple queries on a spectrum.
