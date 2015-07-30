@@ -60,11 +60,11 @@ wait
 timestamp=`date +"%s"`
 
 echo "      === [3] Process the dataset  ==="
-$SPARK_HOME/bin/spark-submit --master spark://sparkvm:7077 --py-files=../blockentropy.py,../util.py,../computing.py run_process_dataset.py --out=${DIRECTORY_PATH}/${DATASET}_result_${timestamp}.pkl --ds=${DIRECTORY_PATH}/${FILENAME}.txt --rows=${ROWS} --cols=${COLS} --queries=${DIRECTORY_PATH}/queries.pkl
+$SPARK_HOME/bin/spark-submit --master spark://<IP>:7077 --py-files=../blockentropy.py,../util.py,../computing.py run_process_dataset.py --out=${DIRECTORY_PATH}/${DATASET}_result_${timestamp}.pkl --ds=${DIRECTORY_PATH}/${FILENAME}.txt --rows=${ROWS} --cols=${COLS} --queries=${DIRECTORY_PATH}/queries.pkl
 
 wait
 
 echo "      === [4] Add results to the database ==="
-python run_insert_to_db.py --ip=${DIRECTORY_PATH}/${FILENAME}.txt --rp=${DIRECTORY_PATH}/${DATASET}_result.pkl --cp=${DIRECTORY_PATH}/${FILENAME}_coord.txt --dsname=${DATASET} --config=../config.json --rows=134 --cols=260
+python run_insert_to_db.py --ip=${DIRECTORY_PATH}/${FILENAME}.txt --rp=${DIRECTORY_PATH}/${DATASET}_result.pkl --cp=${DIRECTORY_PATH}/${FILENAME}_coord.txt --dsname=${DATASET} --config=../config.json --rows=${ROWS} --cols=${COLS}
 
 echo "All done!"
